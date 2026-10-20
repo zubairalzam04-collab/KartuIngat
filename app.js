@@ -384,7 +384,7 @@ async function panggilAI(teks) {
     const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
     return bersihAI(JSON.parse(t.replace(/```json|```/g, '').trim()));
   }                          // jalur 2: kunci demo via server (Langkah 9B)
-   if (PROXY_URL) {                               // jalur 2: kunci demo via server
+   if (PROXY_URL) {                             // jalur 2: kunci demo via server
     let r;
     try {
       r = await fetch(PROXY_URL, { method: 'POST',
@@ -397,7 +397,6 @@ async function panggilAI(teks) {
       : 'Server demo bermasalah (' + r.status + ').');
     return bersihAI(await r.json());
   }
-  throw new Error('Masukkan API key Gemini di tab Profil dulu.');
 }
 
 // Markdown blok: mendukung daftar "- poin"
