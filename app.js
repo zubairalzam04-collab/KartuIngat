@@ -339,7 +339,7 @@ function baca(el) {
 
 // ---------- AI (GEMINI) ----------
 const MODEL = 'gemini-2.5-flash';   // cek nama model gratis terbaru di AI Studio
-const PROXY_URL = '';               // diisi di Langkah 9B
+const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';         // diisi di Langkah 9B
 const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
 
 const ambilKunci = () => { try { return localStorage.getItem(KUNCI_AI) || ''; } catch (e) { return ''; } };
@@ -383,11 +383,18 @@ async function panggilAI(teks) {
     const j = await r.json();
     const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
     return bersihAI(JSON.parse(t.replace(/```json|```/g, '').trim()));
-  }
-  if (PROXY_URL) {                               // jalur 2: kunci demo via server (Langkah 9B)
-    const r = await fetch(PROXY_URL, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teks }) });
-    if (!r.ok) throw new Error(r.status === 429 ? 'Kuota demo habis, coba lagi nanti.' : 'Error ' + r.status);
+  }                          // jalur 2: kunci demo via server (Langkah 9B)
+   if (PROXY_URL) {                               // jalur 2: kunci demo via server
+    let r;
+    try {
+      r = await fetch(PROXY_URL, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teks }) });
+    } catch (e) {
+      throw new Error('Tidak bisa menghubungi server demo. Periksa internet, atau pakai API key sendiri di Profil.');
+    }
+    if (!r.ok) throw new Error(r.status === 429
+      ? 'Kuota demo sedang habis. Coba lagi nanti, atau pakai API key sendiri di Profil.'
+      : 'Server demo bermasalah (' + r.status + ').');
     return bersihAI(await r.json());
   }
   throw new Error('Masukkan API key Gemini di tab Profil dulu.');
@@ -411,6 +418,7 @@ function tampilAI() {
       <div class="row"><button class="g" onclick="buangAI(${i})">Buang</button></div></div>`).join('') : '';
   return `<button class="g" onclick="layar='decks';render()">← Kembali</button>
     <h3>✨ Buat dek dengan AI</h3>
+    <p class="mu">Memakai: ${ambilKunci() ? 'API key pribadimu' : 'kunci demo bawaan'}</p>
     <label>Nama dek</label><input id="aiNama" value="${esc(aiNama)}" placeholder="mis. Fotosintesis">
     <label>Materi (tempel catatan atau artikel)</label>
     <textarea id="aiTeks" rows="8">${esc(aiTeks)}</textarea>
