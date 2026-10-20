@@ -338,7 +338,7 @@ function baca(el) {
 }
 
 // ---------- AI (GEMINI) ----------
-const MODEL = 'gemini-2.5-flash';   // cek nama model gratis terbaru di AI Studio
+const MODEL = 'gemini-3.8-flash';   // cek nama model gratis terbaru di AI Studio
 const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';        
 const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
 
