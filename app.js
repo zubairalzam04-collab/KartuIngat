@@ -16,7 +16,7 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 
-const hariIni = () => new Date().toLocaleDateString('en-CA'); // format 2026-10-19
+const hariIni = () => new Date().toLocaleDateString('en-CA'); // format 2026-10-20
 
 // md(): markdown dasar. **tebal**, *miring*, `kode`, baris baru
 const md = s => esc(s)
@@ -82,6 +82,7 @@ let siapHapus = null;   // dek yang menunggu konfirmasi hapus
 let deckAktif = null;   // dek yang sedang diedit
 let editId = null;      // kartu yang sedang diubah (null = kartu baru)
 let sesi = null;        // data sesi belajar yang sedang berjalan
+let pesan = '';         // pesan hasil ekspor/impor
 
 // ---------- DEK ----------
 function tampilDek() {
@@ -258,6 +259,79 @@ function tampilStats() {
     <p class="mu">Dikuasai = kartu dengan jeda ulasan 21 hari atau lebih.</p>`;
 }
 
+// ---------- EKSPOR / IMPOR ----------
+let modeImpor = 'gabung';
+const TGL = /^\d{4}-\d{2}-\d{2}$/;
+const idAman = s => /^[a-z0-9]{1,12}$/i.test(s) ? s : uid();
+
+// Membersihkan data dari file luar. Penting: file bisa berasal dari siapa saja,
+// jadi tiap field dipaksa ke tipe yang benar sebelum dipakai.
+const bersihDek = d => ({
+  id: idAman(d.id),
+  name: String(d.name),
+  cards: (Array.isArray(d.cards) ? d.cards : [])
+    .filter(c => c && c.f && c.b)
+    .map(c => ({
+      id: idAman(c.id), f: String(c.f), b: String(c.b),
+      ease: Number(c.ease) || 2.5, int: Number(c.int) || 0, reps: Number(c.reps) || 0,
+      due: TGL.test(c.due) ? c.due : hariIni()
+    }))
+});
+
+const bersihTanggal = o => Object.fromEntries(
+  Object.entries(o && typeof o === 'object' ? o : {})
+    .filter(([k, v]) => TGL.test(k) && v));
+
+function ekspor() {
+  const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'kartuingat-' + hariIni() + '.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  pesan = 'Cadangan diunduh. Simpan file-nya di tempat aman.';
+  render();
+}
+
+function pilihBerkas(mode) { modeImpor = mode; $('#berkas').click(); }
+
+function baca(el) {
+  const f = el.files[0];
+  el.value = '';                       // agar file yang sama bisa dipilih lagi
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const data = JSON.parse(r.result);
+      if (!data || !Array.isArray(data.decks)) throw new Error('format salah');
+      const dekBaru = data.decks.filter(d => d && d.name).map(bersihDek);
+
+      if (modeImpor === 'pulihkan') {
+        if (!confirm('Semua data saat ini akan diganti dengan isi cadangan. Lanjutkan?')) return;
+        S = {
+          decks: dekBaru,
+          xp: Number(data.xp) || 0,
+          days: bersihTanggal(data.days),
+          bonus: bersihTanggal(data.bonus),
+          theme: TEMA.some(t => t[0] === data.theme) ? data.theme : 'samudra'
+        };
+        pesan = 'Cadangan dipulihkan: ' + dekBaru.length + ' dek.';
+      } else {
+        dekBaru.forEach(d => {
+          if (S.decks.some(x => x.id === d.id)) { d.id = uid(); d.name += ' (salinan)'; }
+          S.decks.push(d);
+        });
+        pesan = dekBaru.length + ' dek ditambahkan.';
+      }
+      simpan();
+    } catch (e) {
+      pesan = 'Gagal membaca file. Pastikan itu file cadangan KartuIngat (.json).';
+    }
+    render();
+  };
+  r.readAsText(f);
+}
+
 // ---------- PROFIL ----------
 function tampilProfil() {
   const L = level(), a = 40 * (L - 1) ** 2, b = 40 * L * L;   // batas energi level ini
@@ -273,7 +347,18 @@ function tampilProfil() {
       <div class="mu">${S.xp} ⚡ energi · ${b - S.xp} lagi ke level ${L + 1}.
         Dapat energi dari tiap ulasan (Lagi +1, Bagus +5, Mudah +8) dan +20 saat sesi harian tuntas.</div></div>
     <h3>Tema</h3><div class="row" style="flex-wrap:wrap">${tema}</div>
-    <h3>Lencana</h3><div class="grid">${lencana}</div>`;
+    <h3>Lencana</h3><div class="grid">${lencana}</div>
+    <h3>Cadangan data</h3>
+    <div class="box">
+      <p class="mu" style="margin-top:0">Pindahkan dek ke perangkat lain, atau simpan cadangan.</p>
+      <div class="row"><button class="b" onclick="ekspor()">⬇ Ekspor semua data</button></div>
+      <div class="row">
+        <button class="g" onclick="pilihBerkas('gabung')">Impor dek (gabungkan)</button>
+        <button class="g" onclick="pilihBerkas('pulihkan')">Pulihkan cadangan</button>
+      </div>
+      <input type="file" id="berkas" accept=".json,application/json" hidden onchange="baca(this)">
+      <p class="mu">${esc(pesan)}</p>
+    </div>`;
 }
 
 function pilihTema(k) { S.theme = k; simpan(); render(); }
@@ -298,7 +383,8 @@ function render() {
 }
 
 document.querySelectorAll('nav button').forEach(b =>
-  b.onclick = () => { layar = b.dataset.s; siapHapus = null; render(); });
+  b.onclick = () => { layar = b.dataset.s; siapHapus = null; pesan = ''; render(); });
 
 render();
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
