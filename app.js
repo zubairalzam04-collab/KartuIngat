@@ -83,6 +83,7 @@ let deckAktif = null;   // dek yang sedang diedit
 let editId = null;      // kartu yang sedang diubah (null = kartu baru)
 let sesi = null;        // data sesi belajar yang sedang berjalan
 let pesan = '';         // pesan hasil ekspor/impor
+let aiTeks = '', aiNama = '', aiHasil = null, aiPesan = '', ringkasId = null;
 
 // ---------- DEK ----------
 function tampilDek() {
@@ -94,6 +95,7 @@ function tampilDek() {
         <button class="b" ${perluUlas(d).length ? '' : 'disabled'}
                 onclick="mulaiBelajar('${d.id}')">Belajar</button>
         <button class="g" onclick="bukaEditor('${d.id}')">Kartu</button>
+        ${d.summary ? `<button class="g" onclick="bukaRingkas('${d.id}')">📖</button>` : ''}
         <button class="g" onclick="hapusDek('${d.id}')">
           ${siapHapus === d.id ? 'Yakin?' : 'Hapus'}
         </button>
@@ -101,6 +103,7 @@ function tampilDek() {
     </div>`).join('');
 
   return `<h3>Dek saya</h3>
+    <div class="row"><button class="b" onclick="layar='ai';render()">✨ Buat dek dengan AI</button></div>
     <div class="row">
       <input id="namaDek" placeholder="Nama dek baru, mis. Kosakata Jepang">
       <button class="b" onclick="tambahDek()">Buat</button>
@@ -192,7 +195,8 @@ function tampilBelajar() {
     <div class="box" style="text-align:center">
       <h3>Selesai 🎉</h3>
       <p>${sesi.selesai} kartu diulas.${sesi.bonus ? ' Bonus +20 energi! ⚡' : ''}</p>
-      <button class="b" onclick="layar='decks';render()">Kembali ke dek</button>
+      ${d.summary ? `<button class="b" style="margin-bottom:10px" onclick="bukaRingkas('${d.id}')">📖 Baca Rangkuman Materi</button><br>` : ''}
+      <button class="g" onclick="layar='decks';render()">Kembali ke dek</button>
     </div>`;
   const c = d.cards.find(x => x.id === sesi.antrean[0]);
   const tombol = [['Lagi', 0], ['Bagus', 1], ['Mudah', 2]].map(([t, r]) =>
@@ -269,6 +273,7 @@ const idAman = s => /^[a-z0-9]{1,12}$/i.test(s) ? s : uid();
 const bersihDek = d => ({
   id: idAman(d.id),
   name: String(d.name),
+  summary: d.summary ? String(d.summary).slice(0, 5000) : '',
   cards: (Array.isArray(d.cards) ? d.cards : [])
     .filter(c => c && c.f && c.b)
     .map(c => ({
@@ -332,6 +337,125 @@ function baca(el) {
   r.readAsText(f);
 }
 
+// ---------- AI (GEMINI) ----------
+const MODEL = 'gemini-2.5-flash';   // cek nama model gratis terbaru di AI Studio
+const PROXY_URL = '';               // diisi di Langkah 9B
+const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
+
+const ambilKunci = () => { try { return localStorage.getItem(KUNCI_AI) || ''; } catch (e) { return ''; } };
+function simpanKunci() {
+  const k = $('#kunci').value.trim(); if (!k) return;
+  localStorage.setItem(KUNCI_AI, k); render();
+}
+function hapusKunci() { localStorage.removeItem(KUNCI_AI); render(); }
+
+const PROMPT = teks => `Kamu pembuat bahan belajar. Dari materi di bawah, hasilkan:
+1. "kartu": 5 sampai 15 flashcard tanya-jawab. Pertanyaan spesifik, jawaban singkat dan akurat, hanya berdasarkan materi.
+2. "rangkuman": rangkuman ringkas dalam markdown, 5 sampai 8 poin berawalan "- ", boleh **tebal** untuk istilah kunci.
+Gunakan bahasa yang sama dengan materi. Balas HANYA JSON valid tanpa teks lain, bentuknya:
+{"kartu":[{"f":"pertanyaan","b":"jawaban"}],"rangkuman":"- poin 1\\n- poin 2"}
+
+MATERI:
+${teks}`;
+
+// Data dari AI tidak dipercaya begitu saja: paksa ke tipe yang benar
+const bersihAI = d => ({
+  kartu: (Array.isArray(d.kartu) ? d.kartu : []).filter(c => c && c.f && c.b)
+    .slice(0, 20).map(c => ({ f: String(c.f), b: String(c.b) })),
+  rangkuman: String(d.rangkuman || '').slice(0, 5000)
+});
+
+async function panggilAI(teks) {
+  const kunci = ambilKunci();
+  if (kunci) {                                   // jalur 1: kunci pribadi, langsung ke Gemini
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': kunci },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: PROMPT(teks) }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      })
+    });
+    if (!r.ok) throw new Error(r.status === 429 ? 'Kuota habis, coba lagi sebentar lagi.'
+      : [400, 403].includes(r.status) ? 'Permintaan ditolak. Periksa API key dan nama MODEL.'
+      : 'Error ' + r.status);
+    const j = await r.json();
+    const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+    return bersihAI(JSON.parse(t.replace(/```json|```/g, '').trim()));
+  }
+  if (PROXY_URL) {                               // jalur 2: kunci demo via server (Langkah 9B)
+    const r = await fetch(PROXY_URL, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teks }) });
+    if (!r.ok) throw new Error(r.status === 429 ? 'Kuota demo habis, coba lagi nanti.' : 'Error ' + r.status);
+    return bersihAI(await r.json());
+  }
+  throw new Error('Masukkan API key Gemini di tab Profil dulu.');
+}
+
+// Markdown blok: mendukung daftar "- poin"
+const mdBlok = s => {
+  let out = '', buka = false;
+  for (const baris of String(s).split('\n')) {
+    const li = /^\s*[-*]\s+(.*)/.exec(baris);
+    if (li) { if (!buka) { out += '<ul>'; buka = true; } out += '<li>' + md(li[1]) + '</li>'; }
+    else { if (buka) { out += '</ul>'; buka = false; } if (baris.trim()) out += '<p>' + md(baris) + '</p>'; }
+  }
+  return out + (buka ? '</ul>' : '');
+};
+
+function tampilAI() {
+  const h = aiHasil;
+  const kartu = h ? h.kartu.map((c, i) => `
+    <div class="box"><div>${md(c.f)}</div><div class="mu">${md(c.b)}</div>
+      <div class="row"><button class="g" onclick="buangAI(${i})">Buang</button></div></div>`).join('') : '';
+  return `<button class="g" onclick="layar='decks';render()">← Kembali</button>
+    <h3>✨ Buat dek dengan AI</h3>
+    <label>Nama dek</label><input id="aiNama" value="${esc(aiNama)}" placeholder="mis. Fotosintesis">
+    <label>Materi (tempel catatan atau artikel)</label>
+    <textarea id="aiTeks" rows="8">${esc(aiTeks)}</textarea>
+    <div class="row"><button class="b" onclick="buatAI()">Buat kartu dan rangkuman</button></div>
+    <p class="mu">${esc(aiPesan)}</p>
+    ${h ? `${kartu}
+      <div class="box"><b>Rangkuman</b>${mdBlok(h.rangkuman)}</div>
+      <button class="b" onclick="tambahAI()">Simpan sebagai dek baru</button>` : ''}`;
+}
+
+async function buatAI() {
+  aiNama = $('#aiNama').value.trim(); aiTeks = $('#aiTeks').value.trim();
+  if (aiTeks.length < 30) { aiPesan = 'Tempel materi yang lebih panjang dulu.'; return render(); }
+  if (aiTeks.length > 12000) { aiPesan = 'Materi terlalu panjang (maksimal sekitar 12.000 karakter).'; return render(); }
+  aiPesan = 'AI sedang bekerja… (sekitar 5 sampai 20 detik)'; aiHasil = null; render();
+  try {
+    aiHasil = await panggilAI(aiTeks);
+    aiPesan = aiHasil.kartu.length ? 'Periksa hasilnya, buang kartu yang kurang pas.' : 'AI tidak menghasilkan kartu.';
+  } catch (e) { aiPesan = 'Gagal: ' + (e.message || e); }
+  render();
+}
+
+function buangAI(i) {
+  aiNama = $('#aiNama').value; aiTeks = $('#aiTeks').value;
+  aiHasil.kartu.splice(i, 1); render();
+}
+
+function tambahAI() {
+  const nama = $('#aiNama').value.trim() || 'Dek AI ' + hariIni();
+  S.decks.push({ id: uid(), name: nama, summary: aiHasil.rangkuman,
+                 cards: aiHasil.kartu.map(c => mk(c.f, c.b)) });
+  aiHasil = null; aiTeks = ''; aiNama = ''; aiPesan = '';
+  simpan(); layar = 'decks'; render();
+}
+
+function bukaRingkas(id) { ringkasId = id; layar = 'ringkas'; render(); }
+function tampilRingkas() {
+  const d = S.decks.find(x => x.id === ringkasId);
+  if (!d || !d.summary) { layar = 'decks'; return tampilDek(); }
+  return `<button class="g" onclick="layar='decks';render()">← Kembali</button>
+    <h3>📖 Rangkuman: ${esc(d.name)}</h3>
+    <div class="box">${mdBlok(d.summary)}</div>
+    <p class="mu">Dibuat oleh AI. Periksa kembali dengan materi aslimu.</p>`;
+}
+
 // ---------- PROFIL ----------
 function tampilProfil() {
   const L = level(), a = 40 * (L - 1) ** 2, b = 40 * L * L;   // batas energi level ini
@@ -348,6 +472,12 @@ function tampilProfil() {
         Dapat energi dari tiap ulasan (Lagi +1, Bagus +5, Mudah +8) dan +20 saat sesi harian tuntas.</div></div>
     <h3>Tema</h3><div class="row" style="flex-wrap:wrap">${tema}</div>
     <h3>Lencana</h3><div class="grid">${lencana}</div>
+    <h3>Kunci AI (opsional)</h3>
+    <div class="box">
+      <p class="mu" style="margin-top:0">Pakai API key Gemini milikmu sendiri. Kunci hanya disimpan di browser ini dan tidak ikut ekspor.</p>
+      <input id="kunci" type="password" placeholder="${esc(ambilKunci() ? 'Tersimpan (••••' + ambilKunci().slice(-4) + ')' : 'Tempel API key (diawali AIza…)')}">
+      <div class="row"><button class="b" onclick="simpanKunci()">Simpan</button><button class="g" onclick="hapusKunci()">Hapus</button></div>
+    </div>
     <h3>Cadangan data</h3>
     <div class="box">
       <p class="mu" style="margin-top:0">Pindahkan dek ke perangkat lain, atau simpan cadangan.</p>
@@ -368,6 +498,8 @@ const tampilan = {
   decks:   tampilDek,
   edit:    tampilEdit,
   study:   tampilBelajar,
+  ai:      tampilAI,
+  ringkas: tampilRingkas,
   stats:   tampilStats,
   profile: tampilProfil
 };
@@ -379,12 +511,11 @@ function render() {
   $('#app').innerHTML = tampilan[layar]();
   document.querySelectorAll('nav button').forEach(b =>
     b.classList.toggle('on', b.dataset.s === layar ||
-      (b.dataset.s === 'decks' && ['edit', 'study'].includes(layar))));
+      (b.dataset.s === 'decks' && ['edit', 'study', 'ai', 'ringkas'].includes(layar))));
 }
 
 document.querySelectorAll('nav button').forEach(b =>
   b.onclick = () => { layar = b.dataset.s; siapHapus = null; pesan = ''; render(); });
 
 render();
-
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

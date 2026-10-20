@@ -53,3 +53,6 @@ big { display:block; font-size:30px; font-weight:700; color:var(--tx); }
 .lencana { opacity:.35; }
 .lencana.on { opacity:1; }
 .g:disabled { opacity:.4; cursor:not-allowed; }           
+ul { padding-left:20px; margin:8px 0; }
+li { margin:4px 0; }
+.box p { margin:8px 0; }
