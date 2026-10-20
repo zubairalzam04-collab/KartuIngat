@@ -339,7 +339,7 @@ function baca(el) {
 
 // ---------- AI (GEMINI) ----------
 const MODEL = 'gemini-2.5-flash';   // cek nama model gratis terbaru di AI Studio
-const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';         // diisi di Langkah 9B
+const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';        
 const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
 
 const ambilKunci = () => { try { return localStorage.getItem(KUNCI_AI) || ''; } catch (e) { return ''; } };
@@ -397,6 +397,7 @@ async function panggilAI(teks) {
       : 'Server demo bermasalah (' + r.status + ').');
     return bersihAI(await r.json());
   }
+  throw new Error('Masukkan API key Gemini di tab Profil dulu.');
 }
 
 // Markdown blok: mendukung daftar "- poin"
