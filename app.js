@@ -338,9 +338,9 @@ function baca(el) {
 }
 
 // ---------- AI (GEMINI) ----------
-const MODEL = 'gemini-3.8 -flash';   // cek nama model gratis terbaru di AI Studio
+const MODEL = 'gemini-3.8-flash';   // harus SAMA dengan MODEL di Worker
 const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';
-const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
+const KUNCI_AI = 'kartuingat.kunci';// kunci pribadi, disimpan terpisah dan TIDAK ikut ekspor
 
 const ambilKunci = () => { try { return localStorage.getItem(KUNCI_AI) || ''; } catch (e) { return ''; } };
 function simpanKunci() {
@@ -365,7 +365,7 @@ const bersihAI = d => ({
 
 async function panggilAI(teks, berkas) {
   const kunci = ambilKunci();
-  if (kunci) {                                   // jalur 1: kunci pribadi
+  if (kunci) {                                   // jalur 1: kunci pribadi, langsung ke Gemini
     const parts = [];
     if (berkas) parts.push({ inline_data: { mime_type: berkas.mime, data: berkas.data } });
     parts.push({ text: PROMPT(teks, !!berkas) });
@@ -548,8 +548,8 @@ function tampilProfil() {
     <h3>Lencana</h3><div class="grid">${lencana}</div>
     <h3>Kunci AI (opsional)</h3>
     <div class="box">
-      <p class="mu" style="margin-top:0">Pakai API key Gemini milikmu sendiri. Kunci hanya disimpan di browser ini dan tidak ikut ekspor.</p>
-      <input id="kunci" type="password" placeholder="${esc(ambilKunci() ? 'Tersimpan (••••' + ambilKunci().slice(-4) + ')' : 'Tempel API key (diawali AIza…)')}">
+      <p class="mu" style="margin-top:0">Pakai API key Gemini milikmu sendiri. Kunci hanya disimpan di browser ini dan tidak ikut ekspor. Kalau kosong, aplikasi memakai kunci demo bawaan.</p>
+      <input id="kunci" type="password" placeholder="${esc(ambilKunci() ? 'Tersimpan (••••' + ambilKunci().slice(-4) + ')' : 'Tempel API key Gemini')}">
       <div class="row"><button class="b" onclick="simpanKunci()">Simpan</button><button class="g" onclick="hapusKunci()">Hapus</button></div>
     </div>
     <h3>Cadangan data</h3>
