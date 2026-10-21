@@ -16,7 +16,7 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 
-const hariIni = () => new Date().toLocaleDateString('en-CA'); // format 2026-10-20
+const hariIni = () => new Date().toLocaleDateString('en-CA'); // format 2026-10-21
 
 // md(): markdown dasar. **tebal**, *miring*, `kode`, baris baru
 const md = s => esc(s)
@@ -83,7 +83,7 @@ let deckAktif = null;   // dek yang sedang diedit
 let editId = null;      // kartu yang sedang diubah (null = kartu baru)
 let sesi = null;        // data sesi belajar yang sedang berjalan
 let pesan = '';         // pesan hasil ekspor/impor
-let aiTeks = '', aiNama = '', aiHasil = null, aiPesan = '', ringkasId = null;
+let aiTeks = '', aiNama = '', aiHasil = null, aiPesan = '', ringkasId = null, aiBerkas = null;
 
 // ---------- DEK ----------
 function tampilDek() {
@@ -338,8 +338,8 @@ function baca(el) {
 }
 
 // ---------- AI (GEMINI) ----------
-const MODEL = 'gemini-3.8-flash';   // cek nama model gratis terbaru di AI Studio
-const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';        
+const MODEL = 'gemini-3.8 -flash';   // cek nama model gratis terbaru di AI Studio
+const PROXY_URL = 'https://kartuingat-ai.zubairalzam04.workers.dev';
 const KUNCI_AI = 'kartuingat.kunci';// disimpan terpisah, TIDAK ikut ekspor
 
 const ambilKunci = () => { try { return localStorage.getItem(KUNCI_AI) || ''; } catch (e) { return ''; } };
@@ -349,14 +349,12 @@ function simpanKunci() {
 }
 function hapusKunci() { localStorage.removeItem(KUNCI_AI); render(); }
 
-const PROMPT = teks => `Kamu pembuat bahan belajar. Dari materi di bawah, hasilkan:
+const PROMPT = (teks, adaBerkas) => `Kamu pembuat bahan belajar. Dari materi yang diberikan, hasilkan:
 1. "kartu": 5 sampai 15 flashcard tanya-jawab. Pertanyaan spesifik, jawaban singkat dan akurat, hanya berdasarkan materi.
 2. "rangkuman": rangkuman ringkas dalam markdown, 5 sampai 8 poin berawalan "- ", boleh **tebal** untuk istilah kunci.
 Gunakan bahasa yang sama dengan materi. Balas HANYA JSON valid tanpa teks lain, bentuknya:
 {"kartu":[{"f":"pertanyaan","b":"jawaban"}],"rangkuman":"- poin 1\\n- poin 2"}
-
-MATERI:
-${teks}`;
+${adaBerkas ? '\nMateri ada pada file terlampir. Jika berupa foto atau hasil scan, baca tulisan di dalamnya. Abaikan bagian yang tidak terbaca.' : ''}${teks ? '\n\nMATERI:\n' + teks : ''}`;
 
 // Data dari AI tidak dipercaya begitu saja: paksa ke tipe yang benar
 const bersihAI = d => ({
@@ -365,35 +363,40 @@ const bersihAI = d => ({
   rangkuman: String(d.rangkuman || '').slice(0, 5000)
 });
 
-async function panggilAI(teks) {
+async function panggilAI(teks, berkas) {
   const kunci = ambilKunci();
-  if (kunci) {                                   // jalur 1: kunci pribadi, langsung ke Gemini
+  if (kunci) {                                   // jalur 1: kunci pribadi
+    const parts = [];
+    if (berkas) parts.push({ inline_data: { mime_type: berkas.mime, data: berkas.data } });
+    parts.push({ text: PROMPT(teks, !!berkas) });
     const r = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': kunci },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: PROMPT(teks) }] }],
+        contents: [{ parts }],
         generationConfig: { responseMimeType: 'application/json' }
       })
     });
     if (!r.ok) throw new Error(r.status === 429 ? 'Kuota habis, coba lagi sebentar lagi.'
-      : [400, 403].includes(r.status) ? 'Permintaan ditolak. Periksa API key dan nama MODEL.'
+      : [400, 403].includes(r.status) ? 'Permintaan ditolak. Periksa API key, nama MODEL, atau file-nya.'
       : 'Error ' + r.status);
     const j = await r.json();
     const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
     return bersihAI(JSON.parse(t.replace(/```json|```/g, '').trim()));
-  }                          // jalur 2: kunci demo via server (Langkah 9B)
-   if (PROXY_URL) {                             // jalur 2: kunci demo via server
+  }
+  if (PROXY_URL) {                               // jalur 2: kunci demo via server
     let r;
     try {
       r = await fetch(PROXY_URL, { method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teks }) });
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teks, berkas }) });
     } catch (e) {
       throw new Error('Tidak bisa menghubungi server demo. Periksa internet, atau pakai API key sendiri di Profil.');
     }
     if (!r.ok) throw new Error(r.status === 429
       ? 'Kuota demo sedang habis. Coba lagi nanti, atau pakai API key sendiri di Profil.'
+      : r.status === 400 ? 'File atau materi ditolak server (mungkin terlalu besar).'
       : 'Server demo bermasalah (' + r.status + ').');
     return bersihAI(await r.json());
   }
@@ -411,6 +414,63 @@ const mdBlok = s => {
   return out + (buka ? '</ul>' : '');
 };
 
+// ---------- IMPOR FILE (PDF, DOCX, TXT, FOTO) ----------
+const keBase64 = file => new Promise((ok, gagal) => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(',')[1]);
+  r.onerror = () => gagal(new Error('File tidak bisa dibaca.'));
+  r.readAsDataURL(file);
+});
+
+// Foto diperkecil (maks 1600 px) dan diubah ke JPEG agar ringan dikirim
+function perkecilGambar(file, maks = 1600) {
+  return new Promise((ok, gagal) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const s = Math.min(1, maks / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      ok(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); gagal(new Error('Gambar tidak bisa dibaca.')); };
+    img.src = url;
+  });
+}
+
+async function pilihFile(el) {
+  const f = el.files[0]; el.value = '';
+  if (!f) return;
+  aiNama = $('#aiNama').value; aiTeks = $('#aiTeks').value;
+  aiPesan = 'Membaca file…'; render();
+  const nama = f.name.toLowerCase();
+  try {
+    if (f.type.startsWith('image/')) {
+      aiBerkas = { nama: f.name, mime: 'image/jpeg', data: await perkecilGambar(f) };
+    } else if (nama.endsWith('.pdf')) {
+      const batas = (ambilKunci() ? 10 : 4) * 1024 * 1024;   // jalur demo lebih kecil
+      if (f.size > batas) throw new Error('PDF terlalu besar (maksimal ' + batas / 1048576 + ' MB).');
+      aiBerkas = { nama: f.name, mime: 'application/pdf', data: await keBase64(f) };
+    } else if (nama.endsWith('.docx')) {
+      if (!window.mammoth) throw new Error('Pembaca DOCX belum termuat. Periksa internet lalu muat ulang halaman.');
+      const h = await mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() });
+      aiTeks = (aiTeks ? aiTeks + '\n\n' : '') + h.value.trim();
+    } else if (nama.endsWith('.txt')) {
+      aiTeks = (aiTeks ? aiTeks + '\n\n' : '') + (await f.text()).trim();
+    } else throw new Error('Format belum didukung. Pakai PDF, DOCX, TXT, atau foto.');
+    if (!aiNama) aiNama = f.name.replace(/\.[^.]+$/, '');
+    aiPesan = '';
+  } catch (e) { aiPesan = 'Gagal: ' + (e.message || e); }
+  render();
+}
+
+function lepasFile() {
+  aiNama = $('#aiNama').value; aiTeks = $('#aiTeks').value;
+  aiBerkas = null; render();
+}
+
+// ---------- LAYAR AI ----------
 function tampilAI() {
   const h = aiHasil;
   const kartu = h ? h.kartu.map((c, i) => `
@@ -420,7 +480,13 @@ function tampilAI() {
     <h3>✨ Buat dek dengan AI</h3>
     <p class="mu">Memakai: ${ambilKunci() ? 'API key pribadimu' : 'kunci demo bawaan'}</p>
     <label>Nama dek</label><input id="aiNama" value="${esc(aiNama)}" placeholder="mis. Fotosintesis">
-    <label>Materi (tempel catatan atau artikel)</label>
+    <div class="row">
+      <button class="g" onclick="$('#berkas2').click()">📎 Pilih file (PDF, DOCX, TXT, foto)</button>
+      <input type="file" id="berkas2" accept=".pdf,.docx,.txt,image/*" hidden onchange="pilihFile(this)">
+    </div>
+    ${aiBerkas ? `<div class="box">📎 ${esc(aiBerkas.nama)}
+      <div class="row"><button class="g" onclick="lepasFile()">Lepas file</button></div></div>` : ''}
+    <label>Materi (tempel catatan; isi TXT dan DOCX muncul di sini dan bisa diedit)</label>
     <textarea id="aiTeks" rows="8">${esc(aiTeks)}</textarea>
     <div class="row"><button class="b" onclick="buatAI()">Buat kartu dan rangkuman</button></div>
     <p class="mu">${esc(aiPesan)}</p>
@@ -431,11 +497,11 @@ function tampilAI() {
 
 async function buatAI() {
   aiNama = $('#aiNama').value.trim(); aiTeks = $('#aiTeks').value.trim();
-  if (aiTeks.length < 30) { aiPesan = 'Tempel materi yang lebih panjang dulu.'; return render(); }
-  if (aiTeks.length > 12000) { aiPesan = 'Materi terlalu panjang (maksimal sekitar 12.000 karakter).'; return render(); }
-  aiPesan = 'AI sedang bekerja… (sekitar 5 sampai 20 detik)'; aiHasil = null; render();
+  if (!aiBerkas && aiTeks.length < 30) { aiPesan = 'Tempel materi yang lebih panjang, atau pilih file.'; return render(); }
+  if (aiTeks.length > 12000) { aiPesan = 'Materi terlalu panjang (maksimal sekitar 12.000 karakter). Potong dulu isi kotak materi.'; return render(); }
+  aiPesan = 'AI sedang bekerja… (sekitar 5 sampai 30 detik)'; aiHasil = null; render();
   try {
-    aiHasil = await panggilAI(aiTeks);
+    aiHasil = await panggilAI(aiTeks, aiBerkas);
     aiPesan = aiHasil.kartu.length ? 'Periksa hasilnya, buang kartu yang kurang pas.' : 'AI tidak menghasilkan kartu.';
   } catch (e) { aiPesan = 'Gagal: ' + (e.message || e); }
   render();
@@ -450,7 +516,7 @@ function tambahAI() {
   const nama = $('#aiNama').value.trim() || 'Dek AI ' + hariIni();
   S.decks.push({ id: uid(), name: nama, summary: aiHasil.rangkuman,
                  cards: aiHasil.kartu.map(c => mk(c.f, c.b)) });
-  aiHasil = null; aiTeks = ''; aiNama = ''; aiPesan = '';
+  aiHasil = null; aiTeks = ''; aiNama = ''; aiPesan = ''; aiBerkas = null;
   simpan(); layar = 'decks'; render();
 }
 
